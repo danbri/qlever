@@ -10,7 +10,7 @@ Based on analysis of the codebase (`/home/user/qlever/src/`), QLever achieves it
 
 ### 1. Six-Way Permutation Indexing
 
-**Location:** `src/index/Permutation.h:34-42`
+**Location:** [`src/index/Permutation.h:34-42`](https://github.com/ad-freiburg/qlever/blob/master/src/index/Permutation.h#L34-L42)
 
 QLever stores every triple in **six different sort orders** (PSO, POS, SPO, SOP, OPS, OSP). This 6x storage overhead enables any triple pattern to be answered via a sequential scan rather than complex lookups.
 
@@ -20,29 +20,29 @@ Trade-off: Higher disk usage for faster query access patterns
 
 ### 2. Block-Based Columnar Compression
 
-**Location:** `src/index/CompressedRelation.h:56-127`
+**Location:** [`src/index/CompressedRelation.h:56-127`](https://github.com/ad-freiburg/qlever/blob/master/src/index/CompressedRelation.h#L56-L127)
 
 - Triples organized into ~8MB compressed blocks
-- Column-major storage for cache efficiency (`src/engine/idTable/IdTable.h:31-47`)
+- Column-major storage for cache efficiency ([`src/engine/idTable/IdTable.h:31-47`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/idTable/IdTable.h#L31-L47))
 - **Zstandard compression** at level 3 for balanced speed/size
-- **FSST string compression** for vocabularies (`src/index/vocabulary/CompressionWrappers.h:87-94`)
+- **FSST string compression** for vocabularies ([`src/index/vocabulary/CompressionWrappers.h:87-94`](https://github.com/ad-freiburg/qlever/blob/master/src/index/vocabulary/CompressionWrappers.h#L87-L94))
 - Block metadata enables filtering **before decompression**
 
 ### 3. Merge-Based Join Strategy
 
-**Location:** `src/util/JoinAlgorithms/JoinAlgorithms.h:116-130`
+**Location:** [`src/util/JoinAlgorithms/JoinAlgorithms.h:116-130`](https://github.com/ad-freiburg/qlever/blob/master/src/util/JoinAlgorithms/JoinAlgorithms.h#L116-L130)
 
 The permutation indexes ensure data is always pre-sorted on relevant columns, enabling efficient **zipper/merge joins** rather than hash joins for most operations.
 
 ### 4. Multiplicity-Driven Query Planning
 
-**Location:** `src/index/CompressedRelation.h:226-227`
+**Location:** [`src/index/CompressedRelation.h:226-227`](https://github.com/ad-freiburg/qlever/blob/master/src/index/CompressedRelation.h#L226-L227)
 
 Per-column statistics (multiplicities) enable accurate cardinality estimation for join ordering without sampling.
 
 ### 5. Lazy Evaluation & Streaming
 
-**Location:** `src/engine/Result.h:43-51`
+**Location:** [`src/engine/Result.h:43-51`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/Result.h#L43-L51)
 
 Generator-based (`cppcoro::generator`) results enable pipelined execution, avoiding full materialization of intermediate results.
 
@@ -54,7 +54,7 @@ The codebase explicitly acknowledges several performance limitations:
 
 ### OPTIONAL Joins are 3-7x Slower
 
-**Location:** `src/engine/OptionalJoin.cpp:212-216`
+**Location:** [`src/engine/OptionalJoin.cpp:212-216`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/OptionalJoin.cpp#L212-L216)
 
 ```cpp
 // The optional join is about 3-7 times slower than a normal join, due to
@@ -64,7 +64,7 @@ costEstimate *= 4;
 
 ### Multi-Column Joins are 2x Slower
 
-**Location:** `src/engine/MultiColumnJoin.cpp:138-141`
+**Location:** [`src/engine/MultiColumnJoin.cpp:138-141`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/MultiColumnJoin.cpp#L138-L141)
 
 ```cpp
 // This join is slower than a normal join, due to
@@ -74,7 +74,7 @@ costEstimate *= 2;
 
 ### Sorted UNION is Expensive
 
-**Location:** `src/engine/Union.cpp:217`
+**Location:** [`src/engine/Union.cpp:217`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/Union.cpp#L217)
 
 ```cpp
 // A sorted UNION is rather expensive the factor 63 is an empirically
@@ -82,12 +82,12 @@ costEstimate *= 2;
 
 ### Transitive Paths with Complex Closures
 
-- **GitHub Issue #2536:** "lack of optimization for looping complex paths containing transitive-reflexive closure"
-- **GitHub Issue #2503:** "Transitive path like `wdt:P279*` has slow and ugly query plan"
+- [**GitHub Issue #2536**](https://github.com/ad-freiburg/qlever/issues/2536): "lack of optimization for looping complex paths containing transitive-reflexive closure"
+- [**GitHub Issue #2503**](https://github.com/ad-freiburg/qlever/issues/2503): "Transitive path like `wdt:P279*` has slow and ugly query plan"
 
 ### Memory Issues with Large Results
 
-- **GitHub Issue #2588:** Geospatial queries fail with "Tried to allocate 91.5 GB, but only 40 GB were available"
+- [**GitHub Issue #2588**](https://github.com/ad-freiburg/qlever/issues/2588): Geospatial queries fail with "Tried to allocate 91.5 GB, but only 40 GB were available"
 - **Wikidata Benchmarking:** "QLever is slow for adjusted timings on queries with OPTIONAL constructs (WDBench opts), due to often running out of memory"
 
 ---
@@ -122,7 +122,7 @@ This is not inherently disqualifying but requires scrutiny.
 
 3. **Update Performance:** QLever only recently added SPARQL UPDATE support; SPARQLoscope focuses on read performance
 
-4. **Memory Pressure:** QLever's OOM issues (#2481, #2539, #2588) don't appear in controlled benchmarks with pre-sized datasets
+4. **Memory Pressure:** QLever's OOM issues ([#2481](https://github.com/ad-freiburg/qlever/issues/2481), [#2539](https://github.com/ad-freiburg/qlever/issues/2539), [#2588](https://github.com/ad-freiburg/qlever/issues/2588)) don't appear in controlled benchmarks with pre-sized datasets
 
 5. **OPTIONAL-Heavy Workloads:** Real Wikidata queries heavily use OPTIONAL; the 3-7x penalty compounds in practice
 
@@ -144,11 +144,11 @@ From [Wikidata:Scaling Wikidata/Benchmarking](https://www.wikidata.org/wiki/Wiki
 
 | Issue | Impact |
 |-------|--------|
-| #2509 - Incorrect results for OPTIONAL with FILTER | **Correctness bug** |
-| #2502 - Incorrect empty results for Wikidata dates | **Correctness bug** |
-| #2523 - `strdt` doesn't cause proper numeric order | **Semantic incorrectness** |
-| #2559 - Default "demo" superuser in production | **Security vulnerability** |
-| #2539 - Server crash on large queries | **Stability** |
+| [#2509](https://github.com/ad-freiburg/qlever/issues/2509) - Incorrect results for OPTIONAL with FILTER | **Correctness bug** |
+| [#2502](https://github.com/ad-freiburg/qlever/issues/2502) - Incorrect empty results for Wikidata dates | **Correctness bug** |
+| [#2523](https://github.com/ad-freiburg/qlever/issues/2523) - `strdt` doesn't cause proper numeric order | **Semantic incorrectness** |
+| [#2559](https://github.com/ad-freiburg/qlever/issues/2559) - Default "demo" superuser in production | **Security vulnerability** |
+| [#2539](https://github.com/ad-freiburg/qlever/issues/2539) - Server crash on large queries | **Stability** |
 
 ### Feature Gaps (as of 2024-2025)
 
