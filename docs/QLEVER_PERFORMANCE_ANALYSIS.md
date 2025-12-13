@@ -160,6 +160,216 @@ Per the Wikidata evaluation:
 
 ---
 
+## Part 5: The Compounding Cost Problem and Benchmark Validity
+
+### How Feature Costs Multiply in Real Queries
+
+SPARQLoscope tests SPARQL features "in isolation" with ~100 carefully crafted queries. However, real-world SPARQL queries routinely combine multiple features, and QLever's cost model reveals that these costs **multiply rather than add**.
+
+#### QLever's Internal Cost Model
+
+From the source code, we can extract the explicit cost multipliers:
+
+| Operation | Cost Multiplier | Source |
+|-----------|----------------|--------|
+| Standard Join | 1x (baseline) | [`Join.cpp:215-223`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/Join.cpp#L215-L223) |
+| OPTIONAL Join | **4x** | [`OptionalJoin.cpp:214`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/OptionalJoin.cpp#L214) |
+| Multi-Column Join | **2x** | [`MultiColumnJoin.cpp:140`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/MultiColumnJoin.cpp#L140) |
+| Sorted UNION | **~48x** | [`Union.cpp:222`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/Union.cpp#L222) (factor 63 × 3/4) |
+| Per additional join column | **+7%** | [`OptionalJoin.cpp:216`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/OptionalJoin.cpp#L216) |
+
+#### Compounding Example: A Typical Wikidata Query
+
+Consider a realistic query pattern combining common features:
+
+```sparql
+SELECT ?item ?label ?description WHERE {
+  ?item wdt:P31/wdt:P279* wd:Q5 .      # Transitive path (expensive)
+  ?item wdt:P27 ?country .              # Basic pattern
+  OPTIONAL { ?item rdfs:label ?label . FILTER(LANG(?label) = "en") }
+  OPTIONAL { ?item schema:description ?description . FILTER(LANG(?description) = "en") }
+  {
+    { ?item wdt:P106 wd:Q82955 }        # UNION branch 1
+    UNION
+    { ?item wdt:P106 wd:Q36180 }        # UNION branch 2
+  }
+}
+```
+
+**Estimated cost compounding:**
+
+1. Base scan cost: **1x**
+2. First OPTIONAL: **× 4 = 4x**
+3. Second OPTIONAL: **× 4 = 16x**
+4. Sorted UNION (if ordering required): **× 48 = 768x**
+5. Transitive path overhead: **additional unpredictable cost**
+
+A query that takes 10ms with simple patterns could take **7-8 seconds** with this combination—yet each feature tested in isolation might show sub-second performance.
+
+#### Why SPARQLoscope Misses This
+
+SPARQLoscope's design principle of testing features "in isolation" means:
+
+- OPTIONAL is tested alone → shows 4x overhead
+- UNION is tested alone → shows its overhead
+- Subquery is tested alone → shows its overhead
+
+But **real queries nest these operations**, and the costs multiply through the query tree. The benchmark cannot predict that a query combining all three might be 100-1000x slower than the sum of individual feature costs.
+
+---
+
+### Predictive Validity: Can 105 Primitives Predict Complex Query Behavior?
+
+#### The Fundamental Question
+
+> *To what extent are results for the 105 primitives a predictor for a system's behaviour on more complex queries (especially without explicit or implied COUNT)?*
+
+#### Reasons for Skepticism
+
+**1. Non-Linear Cost Interactions**
+
+Query execution is not compositional. The cost of `A JOIN B` is not `cost(A) + cost(B)` but depends on:
+- Intermediate result sizes
+- Memory pressure from materializing results
+- Cache effects from data access patterns
+- Sort order compatibility between operations
+
+SPARQLoscope's isolated primitives cannot capture these interactions.
+
+**2. Query Planner Behavior Divergence**
+
+Different engines make different planning decisions when features combine:
+
+```
+Engine A: Execute OPTIONAL before UNION (cost profile X)
+Engine B: Execute UNION before OPTIONAL (cost profile Y)
+```
+
+Testing primitives in isolation tells you nothing about which planning strategy an engine will choose for combined queries, or whether that choice will be optimal.
+
+**3. The COUNT Exclusion Problem**
+
+The user specifically asks about queries "without explicit or implied COUNT." This is significant because:
+
+- COUNT queries often terminate early once aggregation begins
+- Non-COUNT queries must materialize full result sets
+- Memory consumption scales with result size for non-COUNT queries
+- QLever's OOM issues ([#2481](https://github.com/ad-freiburg/qlever/issues/2481), [#2539](https://github.com/ad-freiburg/qlever/issues/2539)) primarily affect large-result non-COUNT queries
+
+A benchmark heavy on COUNT/aggregation queries would systematically underestimate memory-related failures.
+
+**4. Result Size Distribution**
+
+Primitive tests typically return bounded result sets. Complex queries can produce:
+- Cartesian explosions from poorly-constrained patterns
+- Exponential growth from transitive closures
+- Massive intermediate results that exceed memory
+
+These pathological cases don't appear in "carefully crafted" primitive tests.
+
+---
+
+### Cross-Dataset Generalization: DBLP ≠ Wikidata ≠ Your Data
+
+#### The Fundamental Question
+
+> *To what extent are results for a primitive against one dataset a predictor of how a system (or any system) will perform testing that primitive on very different datasets, including "real world" data with lumpy, weird, buggy or false data?*
+
+#### Why Dataset Characteristics Dominate
+
+**1. Predicate Cardinality Distribution**
+
+| Dataset | Characteristic | Impact |
+|---------|---------------|--------|
+| DBLP | Academic metadata, highly structured | Predictable join selectivity |
+| Wikidata | Encyclopedic, power-law distributions | Extreme skew in property usage |
+| Real-world enterprise | Often denormalized, duplicates | Unpredictable multiplicities |
+
+QLever's cost estimation relies on **multiplicity statistics** ([`CompressedRelation.h:226-227`](https://github.com/ad-freiburg/qlever/blob/master/src/index/CompressedRelation.h#L226-L227)). These statistics are dataset-specific. Good estimates on DBLP don't guarantee good estimates on Wikidata.
+
+**2. Data Quality Issues**
+
+Real-world RDF data contains:
+
+- **Duplicate triples**: Inflates result sizes unexpectedly
+- **Inconsistent typing**: `xsd:integer` vs `xsd:decimal` vs plain literals for "the same" values
+- **Missing inverse relationships**: `A parent B` without `B child A`
+- **Temporal inconsistencies**: Death dates before birth dates
+- **Encoding issues**: Mixed UTF-8/Latin-1, malformed IRIs
+
+SPARQLoscope's "carefully crafted" queries on curated datasets (DBLP, Wikidata Truthy) won't encounter these issues. A production system querying messy enterprise data will.
+
+**3. The "Lumpy Data" Problem**
+
+Consider a property like `wdt:P31` (instance of) in Wikidata:
+
+- ~100 million triples use this property
+- But `wd:Q5` (human) appears in ~10 million of them
+- While `wd:Q523` (star) appears in ~200,000
+
+A benchmark query using `?x wdt:P31 wd:Q523` performs very differently from `?x wdt:P31 wd:Q5`, even though both test "the same primitive." Dataset-specific value distributions dominate performance.
+
+**4. Index Saturation Effects**
+
+QLever's six-permutation design assumes all permutations fit in reasonable storage. For extremely large datasets:
+
+- Index build times become prohibitive
+- Disk I/O patterns change as indexes exceed cache
+- Block compression ratios vary with data entropy
+
+Performance on 500M-triple DBLP doesn't predict performance on 100B-triple datasets.
+
+---
+
+### Structural Limitations of Isolated Primitive Testing
+
+#### What You Learn
+
+- Whether an engine **implements** a feature correctly
+- Baseline performance for **simple uses** of that feature
+- Relative ranking for **that specific primitive on that specific dataset**
+
+#### What You Don't Learn
+
+- Performance on **combined features** (real queries)
+- Behavior under **memory pressure** (production workloads)
+- Response to **data quality issues** (real-world data)
+- **Consistency of results** across engines (correctness)
+- Performance **variance** across different parameter values
+- Behavior with **concurrent queries** (production load)
+
+#### The Validity Gap
+
+SPARQLoscope's 105 primitives are necessary but not sufficient for predicting real-world performance. They are like testing a car's:
+
+- 0-60 acceleration (one primitive)
+- Top speed (one primitive)
+- Fuel efficiency at constant 60mph (one primitive)
+
+...and concluding you know how it will perform in city traffic with potholes, stop signs, and unpredictable pedestrians.
+
+---
+
+### Recommendations for More Valid Benchmarking
+
+1. **Combinatorial query generation**: Test features in combination, not just isolation
+
+2. **Real query log sampling**: Use actual queries from WDQS logs (anonymized)
+
+3. **Adversarial query design**: Include queries known to stress specific engine weaknesses
+
+4. **Multi-dataset validation**: Test same queries across datasets with different characteristics
+
+5. **Result correctness verification**: Compare actual results, not just timing
+
+6. **Memory profiling**: Track peak memory usage, not just execution time
+
+7. **Variance reporting**: Show distribution of times, not just median/mean
+
+8. **Long-tail analysis**: Report 95th/99th percentile performance, not just average
+
+---
+
 ## Conclusions
 
 ### QLever's Performance is Real, But Conditional
