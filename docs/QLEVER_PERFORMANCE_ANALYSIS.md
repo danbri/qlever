@@ -438,6 +438,131 @@ QLever genuinely achieves excellent performance for:
 
 ---
 
+## Part 7: Critical Examination of SPARQLoscope's COUNT-Based Methodology
+
+### The Critique
+
+A careful reading of the SPARQLoscope paper raises fundamental questions about what the benchmark actually measures:
+
+> *"The paper does not provide evidence of external validity, yet strongly implies this. All the paper proves is that QLever is faster at counting the results of certain SPARQL patterns. The authors call these tests of 'single features,' but those always seem to be a combination of at least 3 things: COUNT, a specific kind of triple pattern (e.g., never variable predicates), and a certain feature."*
+
+### Analysis: What SPARQLoscope Actually Measures
+
+#### The Triple Combination Problem
+
+Every SPARQLoscope "primitive" test is actually measuring:
+
+1. **COUNT aggregation** - All benchmark queries use COUNT
+2. **A specific triple pattern type** - Fixed predicates, no variable predicates
+3. **One SPARQL feature** - The nominal feature being tested
+
+This means the benchmark measures: `time(COUNT(feature(pattern)))`, not `time(feature)`.
+
+#### Why This Matters
+
+Different engines optimize COUNT differently:
+
+| Engine Strategy | What It Measures |
+|----------------|------------------|
+| Full materialization + count | Time to compute full result + iterate |
+| Lazy streaming + count | Time to stream results + count incrementally |
+| Cardinality estimation | Time to look up pre-computed statistics |
+| Early termination | Time until COUNT can be computed (may skip work) |
+
+If QLever can compute COUNT more efficiently than competitors (e.g., using pre-computed statistics or early termination), then SPARQLoscope measures "QLever's COUNT optimization" not "QLever's SPARQL feature performance."
+
+### The Physics Question: 126 Million Results in 0.01 Seconds
+
+#### The Claim
+
+From Table 1 of the SPARQLoscope paper, QLever reportedly executes a join producing 126 million results in 0.01 seconds while MDB takes 5 seconds and GLZ takes 86 seconds.
+
+#### The Math
+
+```
+126,000,000 results ÷ 0.01 seconds = 12,600,000,000 results/second = 12.6 GHz
+```
+
+Modern CPUs run at 3-5 GHz. Even with perfect parallelization across 16 cores:
+```
+16 cores × 5 GHz = 80 GHz theoretical maximum
+```
+
+So 12.6 GHz is within theoretical bounds, but only if:
+- Every CPU cycle produces one result
+- No memory access latency
+- No cache misses
+- Perfect parallelization
+
+#### What QLever's Code Reveals
+
+Examining [`CountStarExpression.cpp:22-28`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/sparqlExpressions/CountStarExpression.cpp#L22-L28):
+
+```cpp
+ExpressionResult CountStarExpression::evaluate(
+    sparqlExpression::EvaluationContext* ctx) const {
+  // The case of a simple `COUNT *` is trivial, just return the size
+  // of the evaluation context.
+  if (!distinct_) {
+    return Id::makeFromInt(static_cast<int64_t>(ctx->size()));
+  }
+  // ...
+}
+```
+
+**Key finding:** For non-DISTINCT COUNT, QLever simply returns `ctx->size()` - the pre-computed size of the input table. It does NOT iterate through 126 million rows.
+
+#### But Where Does `ctx->size()` Come From?
+
+The `EvaluationContext` receives an `IdTable& _inputTable` ([`SparqlExpressionTypes.h:169`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/sparqlExpressions/SparqlExpressionTypes.h#L169)), and `size()` returns the table's row count.
+
+**The question becomes:** Does the 0.01 seconds include the time to BUILD this IdTable (materialize the join), or just the time to READ its size?
+
+### Possible Explanations for the Performance Gap
+
+#### Explanation 1: Different Work Being Done
+
+If QLever's query planner rewrites queries differently (e.g., using the "pattern trick" - see [`CheckUsePatternTrick.h`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/CheckUsePatternTrick.h)), it may not be computing the same join as other engines.
+
+The pattern trick replaces certain patterns with lookups against the pre-indexed `ql:has-pattern` predicate, which can return cardinality without computing joins.
+
+#### Explanation 2: Lazy Evaluation with Early Termination
+
+QLever supports lazy evaluation via generators ([`GroupByImpl.cpp`](https://github.com/ad-freiburg/qlever/blob/master/src/engine/GroupByImpl.cpp#L41)). For COUNT, it may:
+1. Start streaming results lazily
+2. Increment counter without full materialization
+3. Return count when stream exhausts
+
+But this still requires iterating through results, so 12.6 GHz remains suspicious.
+
+#### Explanation 3: Pre-Computed Cardinality Statistics
+
+QLever stores multiplicity statistics ([`CompressedRelation.h:226-227`](https://github.com/ad-freiburg/qlever/blob/master/src/index/CompressedRelation.h#L226-L227)). If COUNT can be computed from these statistics for certain query patterns, no actual join is needed.
+
+#### Explanation 4: Measurement Methodology
+
+If timing starts after query parsing/planning and QLever's optimizer identifies this as a "count-only" query, it may short-circuit the computation.
+
+### Fair Assessment
+
+| Aspect | Assessment |
+|--------|------------|
+| **External validity claim** | **Valid critique.** The paper tests COUNT of isolated features, not feature performance in real queries. |
+| **Combination of 3 things** | **Valid critique.** Every test is COUNT + pattern + feature, not just feature. |
+| **Physics impossibility** | **Partially valid.** 12.6 GHz raw iteration is implausible, but QLever likely uses optimizations that avoid full iteration. The benchmark may be measuring "time to return count" not "time to compute join." |
+| **Engines doing different work** | **Likely.** Different query planners may interpret the same SPARQL differently. Without comparing actual result sets, we can't confirm engines compute the same thing. |
+| **Implied generalizability** | **Valid critique.** Fast COUNT performance does not imply fast result materialization, streaming, or export. |
+
+### What Would Be Needed to Validate Claims
+
+1. **Instrumented benchmarks** showing actual rows processed, not just timing
+2. **Memory profiling** showing allocation patterns during execution
+3. **Query plan comparison** across engines for identical queries
+4. **Result verification** confirming all engines return the same count
+5. **Non-COUNT variants** measuring time to materialize and export results
+
+---
+
 ## References
 
 ### SPARQLoscope
