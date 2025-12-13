@@ -105,6 +105,44 @@ costEstimate *= 2;
 
 This is not inherently disqualifying but requires scrutiny.
 
+**Paper:** Bast, H., Kalmbach, J., Textor-Falconi, R., & Ullinger, C. (2025). [Sparqloscope: A Generic Benchmark for the Comprehensive and Concise Performance Evaluation of SPARQL Engines](https://ad-publications.cs.uni-freiburg.de/ISWC_sparqloscope_BKTU_2025.pdf). ISWC 2025.
+
+### What SPARQLoscope Actually Tests
+
+Based on analysis of the [SPARQLoscope GitHub repository](https://github.com/ad-freiburg/sparqloscope) and `query-templates.yaml`:
+
+| Category | # Variants | What's Tested |
+|----------|-----------|---------------|
+| JOIN | 6 | Two-pattern, three-pattern (star/chain), extreme (25+ predicates) |
+| OPTIONAL JOIN | 8 | Left-outer join with various predicate sizes |
+| MINUS JOIN | 8 | Set difference operations |
+| EXISTS JOIN | 8 | Existential filtering |
+| UNION | 4+ | Two-branch unions with constraints |
+| MULTICOLUMN JOIN | 2 | Multi-column join patterns |
+| GROUP BY | 8 | COUNT, MIN, MAX, SAMPLE, GROUP_CONCAT |
+| DISTINCT | 3 | COUNT DISTINCT variants |
+| Transitive Closure | 4 | Property path `+` and `*` |
+| String Filters | 8 | CONTAINS, REGEX, prefix matching |
+| Numeric Filters | 3 | Range filters at 50th/70th/95th percentiles |
+| String Functions | 5 | STRLEN, STRBEFORE, STRAFTER, etc. |
+| Numeric Functions | 7 | ABS, CEIL, FLOOR, ROUND |
+| Date Functions | 3 | YEAR, MONTH, DAY extraction |
+| Result Export | 5 | Scaling from 10 to 10M tuples |
+
+**Total: ~100 queries per dataset, each testing one feature in isolation.**
+
+### What's Notably Absent
+
+Examining the query templates reveals several gaps:
+
+1. **No combined feature tests** - No queries test OPTIONAL + UNION + subquery together
+2. **No nested subqueries** - Subquery category not visible in templates
+3. **No FILTER inside OPTIONAL** - A known QLever weakness ([#2509](https://github.com/ad-freiburg/qlever/issues/2509))
+4. **No SERVICE (federation)** - Critical for real Wikidata usage
+5. **No complex property paths** - Only basic `+` and `*`, not combinations like `(p1|p2)+/p3*`
+6. **No concurrent execution** - All single-query, sequential
+7. **No memory limit testing** - No queries designed to stress memory
+
 ### Design Choices That May Favor QLever
 
 | Design Choice | How It May Favor QLever |
@@ -113,6 +151,8 @@ This is not inherently disqualifying but requires scrutiny.
 | **"Features in isolation"** | Real workloads combine features (OPTIONAL + UNION + subquery) where QLever's multiplicative slowdowns compound |
 | **Cold cache methodology** | QLever's six-permutation design excels at cold queries; caching benefits other engines more |
 | **Focus on "relevant in practice"** | Subjective determination of relevance could exclude QLever's weak areas |
+| **Template-based generation** | Templates designed by QLever authors may unconsciously favor QLever's strengths |
+| **No correctness verification** | Timing-only comparison hides engines that return wrong results faster |
 
 ### What SPARQLoscope May Not Capture
 
@@ -400,10 +440,21 @@ QLever genuinely achieves excellent performance for:
 
 ## References
 
-- [SPARQLoscope Paper - SpringerLink](https://link.springer.com/chapter/10.1007/978-3-032-09530-5_2)
+### SPARQLoscope
+- [SPARQLoscope Paper (PDF)](https://ad-publications.cs.uni-freiburg.de/ISWC_sparqloscope_BKTU_2025.pdf) - Full paper
+- [SPARQLoscope Paper - SpringerLink](https://link.springer.com/chapter/10.1007/978-3-032-09530-5_2) - DOI: 10.1007/978-3-032-09530-5_2
+- [SPARQLoscope GitHub Repository](https://github.com/ad-freiburg/sparqloscope) - Source code and query templates
+- [SPARQLoscope Evaluation Results](https://qlever.dev/evaluation-paper/) - Interactive results
+
+### QLever
 - [QLever GitHub Repository](https://github.com/ad-freiburg/qlever)
 - [QLever Performance Wiki](https://github.com/ad-freiburg/qlever/wiki/QLever-performance-evaluation-and-comparison-to-other-SPARQL-engines)
-- [Wikidata Scaling Benchmarking](https://www.wikidata.org/wiki/Wikidata:Scaling_Wikidata/Benchmarking)
+
+### Independent Evaluations
+- [Wikidata Scaling Benchmarking](https://www.wikidata.org/wiki/Wikidata:Scaling_Wikidata/Benchmarking) - Wikimedia Foundation evaluation
+- [Wikidata Benchmarking Final Report](https://www.wikidata.org/wiki/Wikidata:Scaling_Wikidata/Benchmarking/Final_Report)
+
+### Authors
 - [Hannah Bast Research Profile](https://www.researchgate.net/profile/Hannah-Bast)
 
 ---
